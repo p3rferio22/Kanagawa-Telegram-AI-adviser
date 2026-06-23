@@ -5,6 +5,17 @@ const TelegramBot = require("node-telegram-bot-api");
 const axios = require("axios");
 const prompts = require("./prompts");
 
+// --- ФЕЙКОВИЙ СЕРВЕР ДЛЯ RENDER (Щоб сервіс не падав по таймауту) ---
+const http = require("http");
+const PORT = process.env.PORT || 3000;
+http.createServer((req, res) => {
+  res.writeHead(200, { "Content-Type": "text/plain" });
+  res.end("Bot is running!");
+}).listen(PORT, () => {
+  console.log(`🤖 Фейковий сервер запустищено на порту ${PORT}`);
+});
+// ------------------------------------------------------------------
+
 const bot = new TelegramBot(process.env.BOT_TOKEN, {
   polling: true,
 });
@@ -192,10 +203,6 @@ function getHistory(chatId, limit = 10) {
       (err, rows) => resolve(rows ? rows.reverse() : [])
     );
   });
-}
-
-function clearHistory(chatId) {
-  db.run(`DELETE FROM messages WHERE chat_id = ?`, [chatId]);
 }
 
 // ------------------ TYPING ------------------
@@ -498,7 +505,7 @@ bot.on("message", async (msg) => {
   }
 });
 
-// БЕЗПЕЧНЕ ВИМКНЕННЯ
+// БЕЗПЕЧНЕ ВИМКНЕННЯ (GRACEFUL SHUTDOWN)
 const gracefulShutdown = () => {
   console.log("\n🛑 Отримано сигнал зупинки. Закриття ресурсів...");
   bot.stopPolling();
