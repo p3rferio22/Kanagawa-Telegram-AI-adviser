@@ -20,8 +20,6 @@ const bot = new TelegramBot(process.env.BOT_TOKEN, {
   polling: true,
 });
 
-const ADMIN_ID = process.env.ADMIN_ID;
-
 // Об'єкт для відстеження стану генерації (захист від спаму запитами)
 const userProcessing = new Set();
 
@@ -86,7 +84,13 @@ const categories = {
 // ------------------ ADMIN ------------------
 
 function isAdmin(chatId) {
-  return String(chatId) === String(ADMIN_ID);
+  if (!process.env.ADMIN_ID) return false;
+  
+  // Розбиваємо рядок з .env через кому в масив і прибираємо випадкові пробіли навколо ID
+  const adminIds = process.env.ADMIN_ID.split(',').map(id => id.trim());
+  
+  // Перевіряємо, чи є поточний chatId серед дозволених адмінів
+  return adminIds.includes(String(chatId));
 }
 
 // НАДІЙНИЙ ПОМІЧНИК: Безпечне розбиття довгих текстів з урахуванням HTML-тегів та код-блоків (```)
@@ -132,10 +136,9 @@ async function sendLongMessage(chatId, text, options = {}) {
   }
 }
 
-// НОВА ФУНКЦІЯ: Отримання та надсилання випадкової гіфки з котом без мату (Giphy API Rating G)
+// NОВА ФУНКЦІЯ: Отримання та надсилання випадкової гіфки з відповідей котів (Giphy API Rating G)
 async function sendRandomCatGif(chatId) {
   try {
-    // Робимо запит до Giphy на випадкову гіфку за тегом "cat meme". rating=g повністю виключає нецензурний контент
     const response = await axios.get("https://api.giphy.com/v1/gifs/random", {
       params: {
         api_key: process.env.GIPHY_API_KEY,
@@ -147,12 +150,10 @@ async function sendRandomCatGif(chatId) {
     const gifUrl = response.data?.data?.images?.original?.url;
     
     if (gifUrl) {
-      // Надсилаємо як анімацію (гіфку), щоб вона програвалася прямо в чаті
       await bot.sendAnimation(chatId, gifUrl, { caption: "🐾 Лови котика для гарного настрою!" });
     }
   } catch (error) {
     console.error("❌ Помилка отримання гіфки з Giphy:", error.message);
-    // Якщо Giphy впав або закінчилися ліміти, використовуємо резервне API без ключів (просто красиві коти)
     try {
       const backupUrl = `https://cataas.com/cat/gif?timestamp=${Date.now()}`;
       await bot.sendAnimation(chatId, backupUrl, { caption: "🐾 Резервний котик!" });
@@ -219,8 +220,9 @@ bot.onText(/\/start/, (msg) => {
 });
 
 bot.onText(/\/newchat/, (msg) => {
-  clearHistory(msg.chat.id);
-  bot.sendMessage(msg.chat.id, "🗑 Діалог очищено.");
+  db.run(`DELETE FROM messages WHERE chat_id = ?`, [msg.chat.id], () => {
+    bot.sendMessage(msg.chat.id, "🗑 Діалог очищено.");
+  });
 });
 
 bot.onText(/\/help/, (msg) => {
@@ -277,13 +279,9 @@ bot.onText(/\/stats/, (msg) => {
   );
 });
 
-// Текстова команда перегляду історії дій користувача
 bot.onText(/\/user (\d+)/, (msg, match) => {
   const chatId = msg.chat.id;
-
-  if (!isAdmin(chatId)) {
-    return bot.sendMessage(chatId, "⛔ Немає доступу");
-  }
+  if (!isAdmin(chatId)) return bot.sendMessage(chatId, "⛔ Немає доступу");
 
   const targetId = String(match[1]);
 
@@ -323,8 +321,10 @@ bot.on("callback_query", async (query) => {
   }
 
   if (data === "newchat") {
-    clearHistory(chatId);
-    return bot.sendMessage(chatId, "🗑 Діалог очищено.");
+    db.run(`DELETE FROM messages WHERE chat_id = ?`, [chatId], () => {
+      bot.sendMessage(chatId, "🗑 Діалог очищено.");
+    });
+    return;
   }
 
   if (data === "admin_menu") {
@@ -501,6 +501,7 @@ bot.on("message", async (msg) => {
     console.error("❌ Помилка AI API:", e.response ? e.response.data : e.message);
     bot.sendMessage(chatId, "❌ Сталася помилка під час запиту до ШІ. Спробуйте пізніше.");
   } finally {
+    userProcessing.add(chatId); // Захист
     userProcessing.delete(chatId);
   }
 });
@@ -511,7 +512,7 @@ const gracefulShutdown = () => {
   bot.stopPolling();
   db.close((err) => {
     if (err) console.error("Помилка закриття БД:", err.message);
-    else console.log("📦 Базу даних SQLite успешно закрита.");
+    else console.log("📦 З'єднання з базою даних закрито.");
     process.exit(0);
   });
 };
